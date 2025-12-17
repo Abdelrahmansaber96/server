@@ -1,0 +1,49 @@
+{
+  "name": "AI Module Dependencies",
+  "instructions": "Run: npm install openai",
+  "required": {
+    "openai": "^4.0.0"
+  },
+  "environment_variables": {
+    "OPENAI_API_KEY": "sk-your-openai-api-key-here"
+  },
+  "setup_checklist": [
+    "1. Run: npm install openai",
+    "2. Add OPENAI_API_KEY to .env file",
+    "3. Create MongoDB Atlas Vector Search Index (see INTEGRATION_GUIDE.md)",
+    "4. Restart server",
+    "5. Run: POST /api/ai/generate-all-embeddings to create embeddings",
+    "6. Test: POST /api/ai/query with a sample query"
+  ],
+  "mongodb_atlas_index": {
+    "name": "property_vector_index",
+    "collection": "properties",
+    "database": "your-database-name",
+    "definition": {
+      "fields": [
+        {
+          "type": "vector",
+          "path": "embedding",
+          "numDimensions": 3072,
+          "similarity": "cosine"
+        },
+        {
+          "type": "filter",
+          "path": "price"
+        },
+        {
+          "type": "filter",
+          "path": "type"
+        },
+        {
+          "type": "filter",
+          "path": "bedrooms"
+        },
+        {
+          "type": "filter",
+          "path": "location.city"
+        }
+      ]
+    }
+  }
+}
