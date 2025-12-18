@@ -177,17 +177,54 @@ function extractFiltersFromText(text = "") {
   }
   
   // استخراج عدد الغرف
-  const bedroomMatch = text.match(/(\d+)\s*(?:غرف|غرفة|غرف\s*نوم|bedroom|bed|br)/i);
+  // دعم أرقام عربية: "ثلاث غرف" أو "3 غرف"
+  const arabicNumbers = {
+    'واحد': 1, 'واحدة': 1, 'اثنين': 2, 'اثنتين': 2, 'ثلاث': 3, 'ثلاثة': 3,
+    'أربع': 4, 'اربع': 4, 'أربعة': 4, 'اربعة': 4, 'خمس': 5, 'خمسة': 5,
+    'ست': 6, 'ستة': 6, 'سبع': 7, 'سبعة': 7, 'ثمان': 8, 'ثمانية': 8,
+    'تسع': 9, 'تسعة': 9, 'عشر': 10, 'عشرة': 10,
+  };
+  
+  let bedroomMatch = text.match(/(\d+)\s*(?:غرف|غرفة|غرف\s*نوم|bedroom|bed|br)/i);
   if (bedroomMatch) {
     filters.bedrooms = parseInt(bedroomMatch[1]);
+  } else {
+    // البحث عن أرقام عربية كتابة
+    const arabicBedroomMatch = text.match(/(واحد|واحدة|اثنين|اثنتين|ثلاث|ثلاثة|أربع|اربع|أربعة|اربعة|خمس|خمسة|ست|ستة|سبع|سبعة|ثمان|ثمانية|تسع|تسعة|عشر|عشرة)\s*(?:غرف|غرفة|غرف\s*نوم)/i);
+    if (arabicBedroomMatch) {
+      const arabicWord = arabicBedroomMatch[1].toLowerCase();
+      filters.bedrooms = arabicNumbers[arabicWord];
+    }
   }
   
-  // استخراج المساحة (يجب أن تكون 30 متر على الأقل لتمييزها عن الأرقام الأخرى)
-  const areaMatch = text.match(/(\d{2,})\s*(?:متر|م|sqm|square|sq)/i);
-  if (areaMatch) {
-    const areaValue = parseInt(areaMatch[1]);
-    if (areaValue >= 30) { // الحد الأدنى للمساحة المعقولة
-      filters.minArea = areaValue;
+  // استخراج المساحة
+  // نطاق مساحة: "من 100 إلى 200 متر" أو "بين 100 و 200 متر"
+  const areaRangeMatch = text.match(/(?:من|between)\s*(\d+)\s*(?:إلى|الى|to|و|-)\s*(\d+)\s*(?:متر|م|sqm|square)/i);
+  if (areaRangeMatch) {
+    const minArea = parseInt(areaRangeMatch[1]);
+    const maxArea = parseInt(areaRangeMatch[2]);
+    if (minArea >= 30) filters.minArea = minArea;
+    if (maxArea >= 30) filters.maxArea = maxArea;
+  } else {
+    // مساحة محددة أو حد أدنى: "150 متر" أو "مساحة 150 متر"
+    const areaMatch = text.match(/(\d{2,})\s*(?:متر|م|sqm|square|sq)/i);
+    if (areaMatch) {
+      const areaValue = parseInt(areaMatch[1]);
+      if (areaValue >= 30) { // الحد الأدنى للمساحة المعقولة
+        // إذا ذكر "على الأقل" أو "أكثر من" = حد أدنى فقط
+        if (/(?:على\s*الأقل|أكثر\s*من|minimum|min|at\s*least|above)\s*\d+\s*متر/i.test(text)) {
+          filters.minArea = areaValue;
+        }
+        // إذا ذكر "أقل من" أو "لا يتجاوز" = حد أقصى فقط
+        else if (/(?:أقل\s*من|لا\s*يتجاوز|maximum|max|under)\s*\d+\s*متر/i.test(text)) {
+          filters.maxArea = areaValue;
+        }
+        // قيمة محددة = نطاق ضيق (±10%)
+        else {
+          filters.minArea = Math.floor(areaValue * 0.9); // -10%
+          filters.maxArea = Math.ceil(areaValue * 1.1);  // +10%
+        }
+      }
     }
   }
   
@@ -470,7 +507,14 @@ const GENERAL_KEYWORDS = [
 const NEGOTIATION_STATUS_KEYWORDS = [
   "تفاوض", "التفاوض", "حالة التفاوض", "رد البائع", "البائع", "وافق", "الموافقة",
   "العرض", "عرضي", "طلبي", "حالة الطلب", "رد", "الرد", "يرد", "متى",
-  "negotiation", "status", "seller", "response", "approved", "offer"
+  "negotiation", "status", "seller", "response", "approved", "offer",
+  // ✅ أسئلة المتابعة عن التفاوضات
+  "قيمة العرض", "كام العرض", "كم العرض", "مبلغ العرض", "السعر المعروض",
+  "تفاصيل العرض", "إيه العرض", "ايه العرض", "العرض اللي قدمناه", "العرض اللى قدمناه",
+  "قدمنا كام", "عرضنا كام", "السعر اللي عرضته", "السعر اللى عرضته",
+  "المفاوضات", "مفاوضاتي", "العروض بتاعتي", "عروضي", "العروض اللي قدمتها",
+  "اخبار التفاوض", "أخبار التفاوض", "اي اخبار", "أي أخبار", "فين التفاوض",
+  "شقة اسوان", "عقار اسوان", "اسوان" // كلمات مرتبطة بالعقارات في السياق
 ];
 
 /**
@@ -479,6 +523,24 @@ const NEGOTIATION_STATUS_KEYWORDS = [
 function detectNegotiationStatusIntent(query = "") {
   const lowerQuery = query.toLowerCase();
   return NEGOTIATION_STATUS_KEYWORDS.some(keyword =>
+    lowerQuery.includes(keyword.toLowerCase())
+  );
+}
+
+/**
+ * ✅ كشف سؤال متابعة عن تفاصيل العرض/التفاوض
+ * مثل: "كام قيمة العرض؟" أو "إيه العرض اللي قدمناه؟"
+ */
+function detectOfferDetailsInquiry(query = "") {
+  const lowerQuery = query.toLowerCase();
+  const offerDetailsKeywords = [
+    "كام قيمة", "قيمة العرض", "كم العرض", "مبلغ العرض",
+    "ايه العرض", "إيه العرض", "العرض اللي قدمناه", "العرض اللى قدمناه",
+    "قدمنا كام", "عرضنا كام", "السعر اللي عرضته", "السعر اللى عرضته",
+    "تفاصيل العرض", "شروط العرض", "العرض بتاعي", "عرضي كان",
+    "فلوس العرض", "الفلوس اللي عرضناها"
+  ];
+  return offerDetailsKeywords.some(keyword =>
     lowerQuery.includes(keyword.toLowerCase())
   );
 }
@@ -533,6 +595,77 @@ async function getUserNegotiations(userId) {
     console.error("Failed to fetch user negotiations:", error.message);
     return [];
   }
+}
+
+/**
+ * ✅ كشف نية التفاوض على عقار (بدون سعر محدد بالضرورة)
+ * @param {String} query - استعلام المستخدم
+ * @returns {Object|null} - معلومات نية التفاوض أو null
+ */
+function detectNegotiationRequestIntent(query = "") {
+  const lowerQuery = query.toLowerCase();
+  
+  // كلمات تدل على طلب التفاوض
+  const negotiationKeywords = /عايز\s*(?:أ|ا)?تفاوض|عاوز\s*(?:أ|ا)?تفاوض|أريد\s*(?:أ|ا)?تفاوض|اريد\s*(?:أ|ا)?تفاوض|ابدأ\s*تفاوض|أبدأ\s*تفاوض|تفاوض\s*(?:على|علي)|اتفاوض\s*(?:على|علي)|أتفاوض\s*(?:على|علي)|negotiate|start.*negotiation/i;
+  
+  if (!negotiationKeywords.test(lowerQuery)) {
+    return null;
+  }
+  
+  // محاولة استخراج اسم العقار
+  const propertyPatterns = [
+    // "عايز اتفاوض على جاردن سيتي ب 3 مليون كاش" - مع سعر ونوع دفع
+    /(?:عايز|عاوز|أريد|اريد)?\s*(?:أ|ا)?(?:تفاوض|اتفاوض|أتفاوض)\s*(?:على|علي)\s+(.+?)(?:\s+(?:ب|بسعر|بـ)\s*[\d,.]+|\s+(?:كاش|تقسيط|نقد)\s*$|$)/i,
+  ];
+  
+  let propertyName = null;
+  for (const pattern of propertyPatterns) {
+    const match = query.match(pattern);
+    if (match && match[1]) {
+      propertyName = match[1].trim();
+      // إزالة كلمات زائدة في النهاية (لكن احتفظ بأرقام المناطق مثل 6 أكتوبر)
+      propertyName = propertyName.replace(/\s+(?:بسعر|بـ|السعر|نقدي|كاش|تقسيط)\s*[\d,.]*.*$/i, '').trim();
+      // إزالة السعر في النهاية فقط إذا كان مليون أو جنيه
+      propertyName = propertyName.replace(/\s+[\d,.]+\s*(?:مليون|جنيه).*$/i, '').trim();
+      if (propertyName.length > 2) break;
+    }
+  }
+  
+  // استخراج نوع الدفع إن وجد
+  const isCash = /كاش|نقد|cash/i.test(lowerQuery);
+  const isInstallment = /تقسيط|قسط|installment/i.test(lowerQuery);
+  
+  // استخراج السعر إن وجد
+  let offeredPrice = null;
+  const pricePatterns = [
+    /(\d+(?:\.\d+)?)\s*(?:مليون|million)/i,
+    /([\d,]+)\s*(?:جنيه|egp|pound)/i,
+    /(?:^|\s)(\d{6,})(?:\s|$)/,
+  ];
+  
+  for (const pattern of pricePatterns) {
+    const match = query.match(pattern);
+    if (match) {
+      let price = match[1].replace(/,/g, '');
+      price = parseFloat(price);
+      if (pattern.source.includes('مليون|million')) {
+        price = price * 1000000;
+      }
+      if (price >= 10000) {
+        offeredPrice = price;
+        break;
+      }
+    }
+  }
+  
+  return {
+    action: 'startNegotiation',
+    propertyName,
+    offeredPrice,
+    offerType: isCash ? 'cash' : (isInstallment ? 'installments' : null),
+    hasPrice: !!offeredPrice,
+    hasPaymentType: isCash || isInstallment,
+  };
 }
 
 /**
@@ -663,6 +796,44 @@ function detectOfferModificationIntent(query = "") {
   // كشف تغيير سنوات التقسيط
   const installmentYearsChange = /(?:غير|عدل|بدل).*(?:سن[وة]ات|مد[ةه])|(?:على|لمدة).*(\d+).*سن[وة]|(\d+).*سن[وة].*تقسيط/i;
   
+  // ✅ كشف تعديل السعر المعروض
+  const priceChangeKeywords = /(?:غير|عدل|بدل|حدث).*(?:السعر|العرض|المبلغ)|(?:السعر|العرض|المبلغ).*(?:الى|إلى|ل|يكون)|(?:عايز|عاوز|اريد|أريد).*(?:أعرض|اعرض|عرض).*(?:جديد|تاني)/i;
+  
+  if (priceChangeKeywords.test(query)) {
+    const result = { action: 'changePrice' };
+    
+    // استخراج السعر الجديد
+    const pricePatterns = [
+      /(\d+(?:\.\d+)?)\s*(?:مليون|million)/i,
+      /([\d,]+)\s*(?:جنيه|egp|pound)/i,
+      /(?:^|\s)(\d{6,})(?:\s|$)/,
+    ];
+    
+    for (const pattern of pricePatterns) {
+      const match = query.match(pattern);
+      if (match) {
+        let price = match[1].replace(/,/g, '');
+        price = parseFloat(price);
+        if (pattern.source.includes('مليون|million')) {
+          price = price * 1000000;
+        }
+        if (price >= 10000) {
+          result.newPrice = price;
+          break;
+        }
+      }
+    }
+    
+    // استخراج نوع الدفع إن تغير
+    const isCash = /كاش|نقد|cash/i.test(lowerQuery);
+    const isInstallment = /تقسيط|قسط|installment/i.test(lowerQuery);
+    if (isCash) result.offerType = 'cash';
+    if (isInstallment) result.offerType = 'installments';
+    
+    return result;
+  }
+  
+  // ✅ تحقق من التغيير لتقسيط أولاً (له أولوية)
   if (cashToInstallment.test(query)) {
     const result = { action: 'changeToInstallments' };
     
@@ -683,6 +854,24 @@ function detectOfferModificationIntent(query = "") {
   
   if (installmentToCash.test(query)) {
     return { action: 'changeToCash' };
+  }
+  
+  // ✅ كلمات صريحة للتغيير لتقسيط (لها أولوية على تعديل التفاصيل)
+  const explicitInstallmentRequest = /(?:بدل|غير|حول).*(?:ل|إلى|الى)\s*تقسيط/i;
+  if (explicitInstallmentRequest.test(query)) {
+    const result = { action: 'changeToInstallments' };
+    
+    const downMatch = query.match(/(?:مقدم|المقدم)\s*(\d+)\s*%?|(\d+)\s*%\s*(?:مقدم|المقدم)/i);
+    if (downMatch) {
+      result.downPaymentPercent = parseInt(downMatch[1] || downMatch[2]);
+    }
+    
+    const yearsMatch = query.match(/(\d+)\s*(?:سن[وة]ات?|سنين)/i);
+    if (yearsMatch) {
+      result.installmentYears = parseInt(yearsMatch[1]);
+    }
+    
+    return result;
   }
   
   // تغيير تفاصيل التقسيط فقط
@@ -792,16 +981,42 @@ async function updateNegotiationOffer(userId, modification, propertyTitle = null
         changeDescription = `تم تعديل شروط التقسيط: مقدم ${newOffer.downPaymentPercent || '—'}% على ${newOffer.installmentYears || '—'} سنوات`;
         break;
         
+      case 'changePrice':
+        if (!modification.newPrice) {
+          return { success: false, message: "لم أتمكن من تحديد السعر الجديد. ممكن توضح السعر بالأرقام؟" };
+        }
+        
+        // تحديث السعر المعروض
+        const oldPrice = newOffer.cashOfferPrice || newOffer.offeredPrice || 0;
+        newOffer.cashOfferPrice = modification.newPrice;
+        newOffer.offeredPrice = modification.newPrice;
+        
+        // تحديث نوع الدفع إن تغير
+        if (modification.offerType) {
+          newOffer.offerType = modification.offerType;
+          newOffer.cashOffer = modification.offerType === 'cash';
+        }
+        
+        changeDescription = `تم تعديل السعر من ${oldPrice.toLocaleString()} إلى ${modification.newPrice.toLocaleString()} جنيه 💰`;
+        if (modification.offerType) {
+          changeDescription += ` (${modification.offerType === 'cash' ? 'كاش' : 'تقسيط'})`;
+        }
+        break;
+        
       default:
         return { success: false, message: "نوع التعديل غير معروف" };
     }
     
     // حفظ التعديل في قاعدة البيانات
+    console.log(`📝 Old offer:`, JSON.stringify(oldOffer));
+    console.log(`📝 New offer:`, JSON.stringify(newOffer));
+    
     session.buyerOffer = newOffer;
     session.updatedAt = new Date();
+    session.markModified('buyerOffer'); // ✅ تأكد من أن Mongoose يعرف أن buyerOffer تغير
     await session.save();
     
-    console.log(`✅ Negotiation offer updated for session ${session._id}:`, newOffer);
+    console.log(`✅ Negotiation offer updated for session ${session._id}:`, JSON.stringify(newOffer));
     
     return {
       success: true,
@@ -866,29 +1081,66 @@ async function createNegotiationFromAI(userId, propertyId, offerDetails) {
       cashOfferPrice: property.price || 0,
     };
     
-    // التحقق من وجود جلسة نشطة
-    const activeStatuses = ["pending", "approved", "draft_requested", "draft_generated", "draft_sent"];
-    const existingSession = await NegotiationSession.findOne({
+    // التحقق من وجود أي جلسة سابقة (نشطة أو غير نشطة)
+    const allSessions = await NegotiationSession.find({
       property: property._id,
       buyer: userId,
-      status: { $in: activeStatuses },
     }).sort({ createdAt: -1 });
     
-    if (existingSession) {
-      // تحديث الجلسة الموجودة
-      existingSession.buyerOffer = buyerOffer;
-      existingSession.updatedAt = new Date();
-      await existingSession.save();
+    if (allSessions && allSessions.length > 0) {
+      const latestSession = allSessions[0];
       
-      return {
-        success: true,
-        message: "تم تحديث العرض على العقار",
-        sessionId: existingSession._id,
-        propertyTitle: property.title,
-        offeredPrice: offerDetails.offeredPrice,
-        propertyPrice: property.price,
-        duplicate: true,
-      };
+      // حالات الجلسات النشطة
+      const activeStatuses = ["pending", "approved", "draft_requested", "draft_generated", "draft_sent"];
+      
+      if (activeStatuses.includes(latestSession.status)) {
+        // جلسة نشطة - تحديث العرض
+        latestSession.buyerOffer = buyerOffer;
+        latestSession.updatedAt = new Date();
+        await latestSession.save();
+        
+        const statusArabic = getStatusArabic(latestSession.status);
+        
+        return {
+          success: true,
+          message: `حضرتك بالفعل قدمت عرض على هذا العقار قبل كده!\n📊 حالة العرض: ${statusArabic}\n✅ تم تحديث العرض بالمبلغ الجديد`,
+          sessionId: latestSession._id,
+          propertyTitle: property.title,
+          offeredPrice: offerDetails.offeredPrice,
+          propertyPrice: property.price,
+          previousStatus: latestSession.status,
+          statusArabic: statusArabic,
+          duplicate: true,
+          isActive: true,
+        };
+      } else if (latestSession.status === "declined") {
+        // جلسة مرفوضة - السماح بتقديم عرض جديد
+        return {
+          success: true,
+          message: `⚠️ حضرتك كنت قدمت عرض على هذا العقار قبل كده لكن البائع رفضه.\n\n💡 تقدر تقدم عرض جديد بسعر أحسن؟`,
+          sessionId: latestSession._id,
+          propertyTitle: property.title,
+          offeredPrice: latestSession.buyerOffer?.cashOfferPrice,
+          propertyPrice: property.price,
+          previousStatus: "declined",
+          statusArabic: "تم رفضه سابقاً ❌",
+          needsNewOffer: true,
+          duplicate: true,
+          isActive: false,
+        };
+      } else if (latestSession.status === "confirmed") {
+        // جلسة مؤكدة - لا يمكن التفاوض مرة أخرى
+        return {
+          success: false,
+          message: `✅ حضرتك بالفعل حجزت هذا العقار وتم تأكيد الصفقة!\n\n🎉 الصفقة في مرحلة التنفيذ.\n\nهل تحتاج مساعدة في عقار آخر؟`,
+          sessionId: latestSession._id,
+          propertyTitle: property.title,
+          previousStatus: "confirmed",
+          statusArabic: "تم التأكيد والحجز 🎉",
+          duplicate: true,
+          isActive: false,
+        };
+      }
     }
     
     // إنشاء جلسة تفاوض جديدة
@@ -1130,10 +1382,15 @@ function formatTransactionsContext(negotiations = [], drafts = [], contracts = [
       }
 
       if (neg.buyerOffer) {
+        // ✅ عرض السعر المعروض بوضوح (يمكن أن يكون في offeredPrice أو cashOfferPrice)
+        const offeredPrice = neg.buyerOffer.offeredPrice || neg.buyerOffer.cashOfferPrice;
+        if (offeredPrice) {
+          lines.push(`   💰 السعر المعروض: ${offeredPrice.toLocaleString()} جنيه`);
+        }
         if (neg.buyerOffer.offerType === 'cash') {
-          lines.push(`   عرض: كاش`);
-        } else if (neg.buyerOffer.downPaymentPercent != null) {
-          lines.push(`   عرض: مقدم ${neg.buyerOffer.downPaymentPercent}% وتقسيط ${neg.buyerOffer.installmentYears || '—'} سنوات`);
+          lines.push(`   نوع الدفع: كاش 💵`);
+        } else if (neg.buyerOffer.offerType === 'installments' || neg.buyerOffer.downPaymentPercent != null) {
+          lines.push(`   نوع الدفع: تقسيط - مقدم ${neg.buyerOffer.downPaymentPercent || 0}% على ${neg.buyerOffer.installmentYears || '—'} سنوات 📊`);
         }
       }
       lines.push("");
@@ -1375,6 +1632,7 @@ exports.aiQuery = async (req, res) => {
     // Check for negotiation status inquiry
     const isAskingAboutNegotiation = detectNegotiationStatusIntent(query);
     const isAskingAboutTransactions = detectTransactionStatusIntent(query);
+    const isAskingOfferDetails = detectOfferDetailsInquiry(query);
     let negotiationsContext = "";
     
     // ✅ كشف طلب تعديل عرض التفاوض
@@ -1383,10 +1641,183 @@ exports.aiQuery = async (req, res) => {
     // ✅ كشف عرض سعر جديد على عقار (مع البحث في سياق المحادثة)
     const priceOffer = detectPriceOfferIntent(query, promptHistory);
     
+    // ✅ كشف نية التفاوض (بدون سعر بالضرورة)
+    const negotiationRequest = detectNegotiationRequestIntent(query);
+    
     console.log(`🔍 Negotiation inquiry detected: ${isAskingAboutNegotiation ? 'YES' : 'NO'}, userId: ${userId || 'none'}`);
     console.log(`🔍 Transaction inquiry detected: ${isAskingAboutTransactions ? 'YES' : 'NO'}`);
+    console.log(`🔍 Offer details inquiry detected: ${isAskingOfferDetails ? 'YES' : 'NO'}`);
     console.log(`🔄 Offer modification detected: ${offerModification ? JSON.stringify(offerModification) : 'NO'}`);
     console.log(`💰 Price offer detected: ${priceOffer ? JSON.stringify(priceOffer) : 'NO'}`);
+    console.log(`🤝 Negotiation request detected: ${negotiationRequest ? JSON.stringify(negotiationRequest) : 'NO'}`);
+    
+    // ✅ معالجة طلب التفاوض على عقار (مع إنشاء جلسة فعلية)
+    if (negotiationRequest && userId && !priceOffer) {
+      console.log("🤝 Processing negotiation request...");
+      
+      // البحث عن العقار المطلوب
+      let targetProperty = null;
+      
+      if (negotiationRequest.propertyName) {
+        console.log(`🔍 Searching for property: "${negotiationRequest.propertyName}"`);
+        
+        // البحث بالاسم
+        targetProperty = await Property.findOne({
+          $or: [
+            { title: new RegExp(negotiationRequest.propertyName.replace(/\s+/g, '.*'), 'i') },
+            { 'location.city': new RegExp(negotiationRequest.propertyName, 'i') },
+            { 'location.area': new RegExp(negotiationRequest.propertyName, 'i') },
+            { projectName: new RegExp(negotiationRequest.propertyName, 'i') },
+          ]
+        }).lean();
+        
+        console.log(`🔍 Property search result: ${targetProperty ? 'FOUND - ' + targetProperty.title : 'NOT FOUND'}`);
+      }
+      
+      if (!targetProperty) {
+        // لم نجد العقار - نسأل عن توضيح
+        return res.json({
+          success: true,
+          answer: `عذراً، مش قادر أحدد العقار اللي حضرتك عايز تتفاوض عليه بالظبط. 🤔\n\n` +
+            `ممكن توضح اسم العقار أو تبحث عنه الأول وتقولي اسمه؟ 🔍`,
+          results: [],
+          meta: {
+            searchType: "negotiation-property-not-found",
+            resultsCount: 0,
+            hasFilters: false,
+            action: "need_property_clarification",
+          },
+        });
+      }
+      
+      // ✅ التحقق: هل ده مشروع مطور عقاري؟
+      const isDeveloperProperty = !!(targetProperty.developer || targetProperty.projectName);
+      
+      if (isDeveloperProperty) {
+        return res.json({
+          success: true,
+          answer: `🏢 **${targetProperty.title || targetProperty.projectName}** ده مشروع تابع لمطور عقاري.\n\n` +
+            `💰 السعر: **${targetProperty.price?.toLocaleString() || '—'} جنيه**\n\n` +
+            `⚠️ **مشاريع المطورين العقاريين أسعارها ثابتة ومفيش تفاوض!**\n\n` +
+            `✅ لو حضرتك عايز تشتري، ممكن تحجز الوحدة مباشرة.\n\n` +
+            `هل تحب أساعدك في الحجز أو أعرض عليك عقارات تانية من بائعين عاديين تقدر تتفاوض عليها؟ 🏠`,
+          results: [targetProperty],
+          meta: {
+            searchType: "developer-property",
+            resultsCount: 1,
+            hasFilters: false,
+            action: "no_negotiation_developer",
+            isDeveloperProperty: true,
+          },
+        });
+      }
+      
+      // ✅ لو عندنا سعر ونوع دفع، ننشئ التفاوض مباشرة
+      if (negotiationRequest.hasPrice && negotiationRequest.offerType) {
+        const offerDetails = {
+          offeredPrice: negotiationRequest.offeredPrice,
+          offerType: negotiationRequest.offerType,
+        };
+        
+        const offerResult = await createNegotiationFromAI(userId, targetProperty._id, offerDetails);
+        
+        if (offerResult.success) {
+          return res.json({
+            success: true,
+            answer: `تمام يا فندم! 🤩 تم تقديم عرض **${negotiationRequest.offeredPrice.toLocaleString()} جنيه ${negotiationRequest.offerType === 'cash' ? 'كاش' : 'تقسيط'}** على **${targetProperty.title}**.\n\n` +
+              `✅ تم إرسال العرض للبائع! ⏳ هننتظر رده وهبلغ حضرتك فوراً.\n\n` +
+              `هل تحتاج مساعدة في أي شيء آخر؟ 😊`,
+            results: [targetProperty],
+            meta: {
+              searchType: "negotiation-created",
+              resultsCount: 1,
+              hasFilters: false,
+              action: "offer_submitted",
+              offerDetails: offerResult,
+            },
+          });
+        }
+      }
+      
+      // ✅ لو مفيش سعر أو نوع دفع، نسأل المستخدم
+      let missingInfo = [];
+      if (!negotiationRequest.offerType) missingInfo.push("نوع الدفع (كاش/تقسيط/إيجار)");
+      if (!negotiationRequest.hasPrice) missingInfo.push("السعر المقترح");
+      
+      return res.json({
+        success: true,
+        answer: `تمام يا فندم! 👍 عشان أبدأ التفاوض على **${targetProperty.title}** (السعر المعلن: ${targetProperty.price?.toLocaleString() || '—'} جنيه)، محتاج أعرف:\n\n` +
+          `❓ ${missingInfo.join('\n❓ ')}\n\n` +
+          `لما تقولي التفاصيل دي، هقدم العرض للبائع مباشرة! 🤝`,
+        results: [targetProperty],
+        meta: {
+          searchType: "negotiation-needs-details",
+          resultsCount: 1,
+          hasFilters: false,
+          action: "need_offer_details",
+          propertyId: targetProperty._id,
+          propertyTitle: targetProperty.title,
+          propertyPrice: targetProperty.price,
+        },
+      });
+    };
+    
+    // ✅ معالجة سؤال متابعة عن تفاصيل العرض
+    if (isAskingOfferDetails && userId) {
+      console.log("📋 Processing offer details inquiry...");
+      
+      // جلب التفاوضات الحالية للمستخدم
+      const negotiations = await getUserNegotiations(userId);
+      
+      if (negotiations.length > 0) {
+        // بناء رد تفصيلي بكل العروض
+        let detailsResponse = "📋 **تفاصيل عروضك الحالية:**\n\n";
+        
+        negotiations.forEach((neg, i) => {
+          // ✅ السعر المعروض يمكن أن يكون في offeredPrice أو cashOfferPrice
+          const offeredPrice = neg.buyerOffer?.offeredPrice || neg.buyerOffer?.cashOfferPrice;
+          
+          detailsResponse += `**${i + 1}. ${neg.propertyTitle}**\n`;
+          detailsResponse += `   💰 السعر المعروض: ${offeredPrice?.toLocaleString() || '—'} جنيه\n`;
+          detailsResponse += `   🏷️ سعر العقار الأصلي: ${neg.propertyPrice?.toLocaleString() || '—'} جنيه\n`;
+          
+          if (neg.buyerOffer?.offerType === 'cash') {
+            detailsResponse += `   💵 نوع الدفع: كاش\n`;
+          } else if (neg.buyerOffer?.offerType === 'installments') {
+            detailsResponse += `   📊 نوع الدفع: تقسيط - مقدم ${neg.buyerOffer?.downPaymentPercent || 0}% على ${neg.buyerOffer?.installmentYears || '—'} سنوات\n`;
+          }
+          
+          detailsResponse += `   📌 الحالة: ${neg.statusArabic}\n\n`;
+        });
+        
+        detailsResponse += "هل تحتاج مساعدة في أي شيء تاني؟ 😊";
+        
+        return res.json({
+          success: true,
+          answer: detailsResponse,
+          results: [],
+          meta: {
+            searchType: "offer-details-inquiry",
+            resultsCount: 0,
+            hasFilters: false,
+            action: "show_offer_details",
+            negotiationsCount: negotiations.length,
+          },
+        });
+      } else {
+        return res.json({
+          success: true,
+          answer: "مش لاقي عندك عروض تفاوض حالية. 🤔\n\nلو عايز تتفاوض على عقار، ابحث عنه الأول وقولي 'عايز أتفاوض عليه'! 🏠",
+          results: [],
+          meta: {
+            searchType: "offer-details-inquiry",
+            resultsCount: 0,
+            hasFilters: false,
+            action: "no_offers_found",
+          },
+        });
+      }
+    };
     
     // ✅ تقديم عرض سعر على عقار
     if (priceOffer && userId) {
@@ -1397,12 +1828,18 @@ exports.aiQuery = async (req, res) => {
       
       // محاولة استخراج اسم/وصف العقار من النص
       const propertyNamePatterns = [
-        // "شقة فاخرة في التجمع الخامس" - استخراج كامل
-        /(?:شق[ةه]|فيلا|منزل|عقار|بيت)\s+([^\n،.؟!]+(?:في|فى)\s+[^\n،.؟!]+)/i,
-        // "على الشقة الفاخرة في التجمع الخامس"
-        /(?:على|علي)\s+(?:ال)?(?:شق[ةه]|فيلا|منزل|عقار|بيت)\s+([^\n،.؟!]+)/i,
-        // "للشقة الفاخرة في..."
-        /(?:للشق[ةه]|للفيلا|للمنزل|للعقار|للبيت)\s+([^\n،.؟!]+)/i,
+        // "أعرض 2 مليون على شقة فاخرة في التجمع الخامس"
+        /(?:على|علي)\s+((?:ال)?(?:شق[ةه]|فيلا|منزل|عقار|بيت|دوبلكس|استوديو|محل|دوبليكس)\s+[^\n،؟!]+)/i,
+        // "أتفاوض على الفيلا المستقلة في زايد"
+        /(?:أتفاوض|اتفاوض|تفاوض)\s+(?:على|علي)\s+((?:ال)?(?:شق[ةه]|فيلا|منزل|عقار|بيت|دوبلكس|دوبليكس)\s+[^\n،؟!]+)/i,
+        // "للشقة الفاخرة" أو "لشقة عصرية"
+        /(?:ل|لل)((?:شق[ةه]|فيلا|منزل|عقار|بيت|دوبلكس|استوديو|محل|دوبليكس)\s+[^\n،؟!]+)/i,
+        // "شقة فاخرة في التجمع الخامس" أو "الدوبليكس في 6 أكتوبر" - استخراج كامل مع الموقع (كنسخة احتياطية)
+        /((?:ال)?(?:شق[ةه]|فيلا|منزل|عقار|بيت|دوبلكس|استوديو|محل|دوبليكس)\s+[^\n،؟!]+(?:في|فى)\s+[^\n،؟!]+)/i,
+        // "الدوبليكس في 6 أكتوبر" أو "الدوبليكس بزايد"
+        /((?:ال)?دوبليكس\s+(?:في|فى|ب)\s+[^\n،؟!]+)/i,
+        // "شقة في ..." أو "فيلا في ..."
+        /((?:شق[ةه]|فيلا|دوبليكس)\s+(?:في|فى|ب)\s+[^\n،؟!]+)/i,
       ];
       
       let propertyDescription = null;
@@ -1410,6 +1847,8 @@ exports.aiQuery = async (req, res) => {
         const match = query.match(pattern);
         if (match && match[1]) {
           propertyDescription = match[1].trim();
+          // إزالة كلمات زائدة في النهاية
+          propertyDescription = propertyDescription.replace(/\s*(?:بسعر|ب|السعر|بـ|الى|إلى).*$/i, '').trim();
           console.log(`📍 Extracted property description: "${propertyDescription}"`);
           break;
         }
@@ -1456,23 +1895,44 @@ exports.aiQuery = async (req, res) => {
         console.log(`🔍 Property search result: ${targetProperty ? 'FOUND - ' + targetProperty.title : 'NOT FOUND'}`);
       }
       
-      // إذا لم نجد عقار، ابحث باستخدام الفلاتر من السياق
-      // إذا لم نجد عقار، ابحث باستخدام الفلاتر من السياق (بس نفضل البائعين العاديين)
-      if (!targetProperty && mergedFilters) {
-        console.log(`🔍 Searching with conversation context filters (preferring seller properties)...`);
+      // ⚠️ إذا لم نجد عقار محدد في الرسالة، لا نستخدم السياق القديم!
+      // السبب: السياق قد يحتوي على معلومات عقار سابق (مثل اسوان)
+      // المستخدم ربما يريد التفاوض على عقار جديد تماماً
+      if (!targetProperty && propertyDescription) {
+        console.log(`❌ Could not find property matching: "${propertyDescription}"`);
         
-        // بناء query من الفلاتر - نفضل عقارات البائعين
+        return res.json({
+          success: true,
+          answer: `عذراً، مش قادر ألاقي العقار "${propertyDescription}" 🤔\n\n` +
+            `ممكن تبحث عن العقار الأول وتختاره من النتائج، بعدين تقول "أعرض [السعر] على [اسم العقار]"؟ 🔍`,
+          results: [],
+          meta: {
+            searchType: "offer-property-not-found-specific",
+            resultsCount: 0,
+            hasFilters: false,
+            action: "need_property_clarification",
+          },
+        });
+      }
+      
+      // ✅ فقط إذا لم يُحدد المستخدم عقار معين، نبحث بالفلاتر الحالية (من الرسالة الحالية فقط)
+      const currentFilters = extractFiltersFromText(query);
+      
+      if (!targetProperty && Object.keys(currentFilters).length > 0) {
+        console.log(`🔍 Searching with CURRENT message filters only (not history):`, JSON.stringify(currentFilters));
+        
+        // بناء query من الفلاتر الحالية فقط - نفضل عقارات البائعين
         const contextQuery = {
           seller: { $exists: true, $ne: null }
         };
         
-        if (mergedFilters.city && mergedFilters.city.length > 0) {
+        if (currentFilters.city && currentFilters.city.length > 0) {
           contextQuery['location.city'] = { 
-            $in: mergedFilters.city.map(c => new RegExp(c, 'i')) 
+            $in: currentFilters.city.map(c => new RegExp(c, 'i')) 
           };
         }
-        if (mergedFilters.type) {
-          contextQuery.type = mergedFilters.type;
+        if (currentFilters.type) {
+          contextQuery.type = currentFilters.type;
         }
         
         // البحث عن أول عقار مطابق من بائع عادي
@@ -1480,7 +1940,7 @@ exports.aiQuery = async (req, res) => {
           .sort({ updatedAt: -1 })
           .lean();
         
-        console.log(`🔍 Property search by context filters (seller): ${targetProperty ? 'FOUND - ' + targetProperty.title : 'NOT FOUND'}`);
+        console.log(`🔍 Property search by CURRENT filters (seller): ${targetProperty ? 'FOUND - ' + targetProperty.title : 'NOT FOUND'}`);
         
         // لو ملقيناش من بائع، نبحث من أي حد
         if (!targetProperty && Object.keys(contextQuery).length > 1) {
@@ -1543,23 +2003,46 @@ exports.aiQuery = async (req, res) => {
         const offerResult = await createNegotiationFromAI(userId, targetProperty._id, priceOffer);
         
         if (offerResult.success) {
-          const successMessage = `تمام يا فندم! 🤩 حضرتك بتعرض **${priceOffer.offeredPrice.toLocaleString()} جنيه ${priceOffer.offerType === 'cash' ? 'كاش' : 'تقسيط'}** على **${targetProperty.title || 'العقار'}** اللي سعره **${offerResult.propertyPrice?.toLocaleString() || '—'} جنيه**.\n\n` +
-            `✅ تم تقديم العرض للبائع بنجاح! ⏳ هننتظر رده وهبلغ حضرتك فوراً أول ما يوصل رد.\n\n` +
-            `هل تحتاج مساعدة في أي شيء آخر؟ 😊`;
+          let successMessage = "";
+          
+          // حالة: عرض جديد تماماً
+          if (!offerResult.duplicate) {
+            successMessage = `تمام يا فندم! 🤩 حضرتك بتعرض **${priceOffer.offeredPrice.toLocaleString()} جنيه ${priceOffer.offerType === 'cash' ? 'كاش' : 'تقسيط'}** على **${targetProperty.title || 'العقار'}** اللي سعره **${offerResult.propertyPrice?.toLocaleString() || '—'} جنيه**.\n\n` +
+              `✅ تم تقديم العرض للبائع بنجاح! ⏳ هننتظر رده وهبلغ حضرتك فوراً أول ما يوصل رد.\n\n` +
+              `هل تحتاج مساعدة في أي شيء آخر؟ 😊`;
+          }
+          // حالة: تحديث عرض نشط موجود
+          else if (offerResult.isActive) {
+            successMessage = `📢 **انتبه!** حضرتك كنت قدمت عرض على هذا العقار قبل كده!\n\n` +
+              `📊 **حالة العرض السابق:** ${offerResult.statusArabic}\n\n` +
+              `✅ تم تحديث العرض بالمبلغ الجديد: **${priceOffer.offeredPrice.toLocaleString()} جنيه ${priceOffer.offerType === 'cash' ? 'كاش' : 'تقسيط'}**\n\n` +
+              `⏳ هننتظر رد البائع وهبلغ حضرتك فوراً.\n\n` +
+              `تقدر تتابع حالة العرض من صفحة **"عروضي"** 📋`;
+          }
+          // حالة: عرض سابق مرفوض - تحذير المستخدم
+          else if (offerResult.needsNewOffer) {
+            successMessage = `⚠️ **تنبيه مهم!**\n\n` +
+              `حضرتك كنت قدمت عرض على **${targetProperty.title}** قبل كده لكن البائع **رفضه** ❌\n\n` +
+              `💰 **العرض السابق:** ${offerResult.offeredPrice?.toLocaleString() || '—'} جنيه\n` +
+              `💰 **سعر العقار:** ${offerResult.propertyPrice?.toLocaleString() || '—'} جنيه\n\n` +
+              `💡 **نصيحة:** ممكن تقدم عرض جديد بسعر أقرب لسعر البائع عشان يوافق!\n\n` +
+              `هل تحب تقدم عرض جديد؟ لو آه، قولي السعر الجديد وأنا هقدمه للبائع. 😊`;
+          }
           
           return res.json({
             success: true,
             answer: successMessage,
             results: [targetProperty],
             meta: {
-              searchType: "negotiation-created",
+              searchType: offerResult.duplicate ? "negotiation-existing" : "negotiation-created",
               resultsCount: 1,
               hasFilters: false,
-              action: "offer_submitted",
+              action: offerResult.needsNewOffer ? "offer_needs_update" : "offer_submitted",
               offerDetails: offerResult,
             },
           });
         } else {
+          // حالة فشل (مثل: عقار محجوز بالفعل)
           return res.json({
             success: true,
             answer: `⚠️ ${offerResult.message}`,
@@ -1569,6 +2052,7 @@ exports.aiQuery = async (req, res) => {
               resultsCount: 1,
               hasFilters: false,
               action: "offer_failed",
+              failureReason: offerResult.previousStatus,
             },
           });
         }
@@ -1578,7 +2062,10 @@ exports.aiQuery = async (req, res) => {
     // ✅ تنفيذ تعديل عرض التفاوض إذا تم طلبه
     if (offerModification && userId) {
       console.log("📝 Processing offer modification request...");
+      console.log(`📝 Modification details:`, JSON.stringify(offerModification));
       const modificationResult = await updateNegotiationOffer(userId, offerModification);
+      
+      console.log(`📝 Modification result:`, JSON.stringify(modificationResult));
       
       if (modificationResult.success) {
         // رد مباشر بنجاح التعديل
@@ -1794,16 +2281,20 @@ exports.aiQuery = async (req, res) => {
     }
 
     // Step 4: Return response
+    // ✅ فقط أرجع النتائج إذا كان المستخدم يبحث عن عقار فعلياً
+    const shouldReturnProperties = wantsPropertySearch && hasEnoughInfo && retrievedProperties.length > 0;
+    
     res.json({
       success: true,
       answer: aiAnswer,
-      results: retrievedProperties,
+      results: shouldReturnProperties ? retrievedProperties : [], // ✅ لا ترجع نتائج في المحادثة العامة
       followUpQuestion: followUpQuestion,
       meta: {
-        resultsCount: retrievedProperties.length,
+        resultsCount: shouldReturnProperties ? retrievedProperties.length : 0,
         timestamp: new Date().toISOString(),
         mode: useAI ? 'ai' : 'basic',
         provider: isGeminiConfigured() ? 'gemini' : (isOpenAIConfigured() ? 'openai' : 'none'),
+        searchPerformed: shouldReturnProperties,
       },
     });
   } catch (error) {
