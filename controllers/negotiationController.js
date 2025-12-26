@@ -343,12 +343,22 @@ exports.startNegotiation = async (req, res) => {
     const buyerName = req.user.name || req.user.email || "Buyer";
     const propertyTitle = property.projectName || property.title || "Property";
 
+    // ✅ بناء رسالة الإشعار مع تفاصيل العرض
+    let offerDetails = "";
+    if (buyerOffer.offerType === "cash" && buyerOffer.cashOfferPrice) {
+      offerDetails = ` بسعر ${buyerOffer.cashOfferPrice.toLocaleString()} جنيه كاش`;
+    } else if (buyerOffer.offerType === "installments") {
+      offerDetails = ` بنظام تقسيط: مقدم ${buyerOffer.downPaymentPercent || 10}% على ${buyerOffer.installmentYears || 3} سنوات`;
+    } else if (buyerOffer.offerType === "rent" && buyerOffer.rentBudget) {
+      offerDetails = ` للإيجار بـ ${buyerOffer.rentBudget.toLocaleString()} جنيه شهرياً`;
+    }
+
     await createNotification({
       type: "info",
-      title: "New Negotiation Request",
-      message: `${buyerName} started a negotiation on your ${
-        property.developer ? "project" : "property"
-      }: ${propertyTitle}`,
+      title: "عرض تفاوض جديد",
+      message: `${buyerName} قدم عرض تفاوض على ${
+        property.developer ? "مشروعك" : "عقارك"
+      }: ${propertyTitle}${offerDetails}`,
       recipient: sellerId,
       recipientRole: sellerRole,
       referenceId: session._id,
