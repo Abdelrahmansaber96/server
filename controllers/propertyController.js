@@ -120,7 +120,7 @@ exports.createProperty = async (req, res) => {
     const property = new Property(data);
     await property.save();
     // 🔔 إنشاء notification
-     // 🧾 اسم المستخدم (يتعامل مع كل الحالات)
+    // 🧾 اسم المستخدم (يتعامل مع كل الحالات)
     const userName =
       req.user.name || req.user.username || req.user.email || "User";
     const isProject = userRole === "real_estate_developer";
@@ -136,9 +136,8 @@ exports.createProperty = async (req, res) => {
       await createNotification({
         type: "info",
         title: isProject ? "New Project Created" : "New Property Listed",
-        message: `${userName} added a new ${
-          isProject ? "project" : "property"
-        }: ${propertyTitle}`,
+        message: `${userName} added a new ${isProject ? "project" : "property"
+          }: ${propertyTitle}`,
         recipient: admin._id, // 👈 كل أدمن لوحده
         recipientRole: "admin",
         referenceId: property._id,
@@ -407,7 +406,7 @@ exports.deleteProperty = async (req, res) => {
 // ✅ Get properties created by current seller or developer
 exports.getSellerProperties = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.id || req.user._id;
     const role = req.user.role;
 
     let filter = {};
@@ -423,12 +422,17 @@ exports.getSellerProperties = async (req, res) => {
       });
     }
 
+    console.log(`🔍 Fetching properties for role: ${role}, userId: ${userId}`);
+    console.log(`🔍 Filter used:`, JSON.stringify(filter));
+
     const properties = await Property.find(filter)
       .populate(
         role === "seller" ? "seller" : "developer",
         "name email phone avatar"
       )
       .sort({ createdAt: -1 });
+
+    console.log(`✅ Found ${properties.length} properties for user ${userId}`);
 
     if (!properties.length) {
       return res.json({

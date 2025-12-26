@@ -13,6 +13,9 @@ router.get("/test", (req, res) => {
 // Main AI Query endpoint - attaches user context when token exists
 router.post("/query", optionalAuthMiddleware, aiController.aiQuery);
 
+// 🎤 Voice AI Query endpoint - optimized for speech
+router.post("/voice", optionalAuthMiddleware, aiController.voiceQuery);
+
 // Recommendations based on onboarding answers - requires authentication
 router.post("/recommend", authMiddleware, aiController.recommendFromPreferences);
 

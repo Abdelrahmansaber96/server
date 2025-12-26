@@ -3,7 +3,7 @@ const {
   isGeminiConfigured,
   GEMINI_MODEL,
 } = require("./genai-client");
-const SYSTEM_PROMPT = require("../system-prompt");
+const { SYSTEM_PROMPT, VOICE_SYSTEM_PROMPT } = require("../system-prompt");
 
 const MAX_RETRIES = 5; // Increased from 2 to 5
 const BASE_RETRY_DELAY = 1000; // Start with 1 second
@@ -229,8 +229,119 @@ async function generateFollowUpQuestion(previousQuery, aiResponse) {
   }
 }
 
+/**
+ * 🎤 Generate Voice-Optimized AI Response
+ * Optimized for text-to-speech output - shorter, clearer, no emojis
+ * @param {String} userSpeechText - Text from speech recognition
+ * @param {Array} retrievedUnits - Properties from database
+ * @param {String} currentStage - discovery | recommendation | negotiation | booking | contract
+ * @param {Array} conversationHistory - Previous conversation turns
+ * @param {String} memorySummary - Summary of previous conversations
+ * @param {String} negotiationsContext - Context about user's active negotiations
+ * @returns {Promise<String>} Voice-optimized AI response
+ */
+async function generateVoiceResponse(userSpeechText, retrievedUnits = [], currentStage = "discovery", conversationHistory = [], memorySummary = "", negotiationsContext = "") {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(`\n🎤 === Voice Response Attempt ${attempt}/${MAX_RETRIES} ===`);
+      console.log(`📍 Stage: ${currentStage}`);
+      
+      const historyContext = formatConversationHistory(conversationHistory);
+      
+      // Format properties for voice - VERY COMPACT, no special characters
+      const unitsContext = retrievedUnits.length > 0
+        ? retrievedUnits.slice(0, 2).map((prop, index) => {
+            const price = prop.price ? prop.price.toLocaleString() : "غير محدد";
+            const city = prop.location?.city || "";
+            const area = prop.area || "غير محدد";
+            return `${index + 1}. ${prop.title || "عقار"} في ${city}، ${area} متر، بسعر ${price} جنيه`;
+          }).join(". ")
+        : "لا توجد وحدات متاحة حالياً";
+
+      // Get Gemini client
+      const client = getGeminiClient();
+      if (!client) {
+        throw new Error("Google AI not configured - missing API key");
+      }
+      
+      // Build voice-optimized prompt
+      const stageContext = `المرحلة الحالية: ${currentStage}`;
+      const conversationContext = historyContext ? `سياق المحادثة:\n${historyContext}\n` : "";
+      const memoryContext = memorySummary ? `ذاكرة سابقة:\n${memorySummary}\n` : "";
+      const negotiationsInfo = negotiationsContext ? `تفاوضات:\n${negotiationsContext}\n` : "";
+
+      const fullPrompt = `${VOICE_SYSTEM_PROMPT}
+
+${stageContext}
+${memoryContext}${negotiationsInfo}${conversationContext}
+الوحدات المتاحة: ${unitsContext}
+
+كلام العميل: ${userSpeechText}
+
+رد بصوت واضح ومختصر:`;
+      
+      console.log(`📝 Voice prompt prepared (${fullPrompt.length} chars)`);
+      
+      const response = await client.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: fullPrompt,
+        config: {
+          temperature: 0.3, // Slightly creative but consistent
+          maxOutputTokens: 300, // Keep responses short for voice
+        }
+      });
+      
+      let voiceResponse = response.text;
+      
+      // Clean up response for voice (remove emojis and special characters)
+      voiceResponse = voiceResponse
+        .replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // Remove emojis
+        .replace(/[✅❌⚠️🏠💰📋🎉⏳🤔😊👍🤩📊📍🔍✔️✖️]/g, '') // Remove specific emojis
+        .replace(/\*\*/g, '') // Remove bold markdown
+        .replace(/\*/g, '') // Remove italics
+        .replace(/#+\s*/g, '') // Remove headers
+        .replace(/\n{3,}/g, '\n\n') // Reduce multiple newlines
+        .trim();
+      
+      if (!voiceResponse || voiceResponse.trim().length === 0) {
+        throw new Error("Empty voice response from Gemini");
+      }
+
+      console.log(`✅ Voice response generated (${voiceResponse.length} chars)\n`);
+      return voiceResponse;
+      
+    } catch (error) {
+      lastError = error;
+      console.error(`❌ Voice attempt ${attempt} failed: ${error.message}`);
+      
+      const isRateLimitError = error.message?.includes("429");
+      const isServerError = error.message?.includes("503") || error.message?.includes("500");
+      
+      if ((isRateLimitError || isServerError) && attempt < MAX_RETRIES) {
+        const delayMs = getRetryDelay(attempt);
+        console.log(`⏳ Retrying in ${(delayMs / 1000).toFixed(1)}s...`);
+        await sleep(delayMs);
+      } else {
+        break;
+      }
+    }
+  }
+  
+  // Fallback voice response
+  console.error(`❌ Voice generation failed: ${lastError?.message}`);
+  if (retrievedUnits && retrievedUnits.length > 0) {
+    const prop = retrievedUnits[0];
+    return `معلش، حصل مشكلة تقنية. لكن عندي ${prop.title || 'عقار'} في ${prop.location?.city || 'موقع مميز'} ممكن يناسبك. تحب أكمل معاك؟`;
+  }
+  return "معلش، حصل مشكلة تقنية بسيطة. ممكن تعيد السؤال تاني؟";
+}
+
 module.exports = {
   generateAIResponse,
+  generateVoiceResponse,
   generateFollowUpQuestion,
   isGeminiConfigured,
+  VOICE_SYSTEM_PROMPT,
 };

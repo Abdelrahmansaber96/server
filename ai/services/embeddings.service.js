@@ -5,6 +5,14 @@ const Property = require("../../models/propertyModel");
 const FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/embeddings";
 const FIREWORKS_MODEL = "fireworks/qwen3-embedding-8b";
 
+// Rate limiting configuration - INCREASED DELAYS
+const RATE_LIMIT_DELAY = 2000; // 2 seconds delay between requests (increased from 1s)
+const MAX_RETRIES = 5; // Increased retry attempts
+const INITIAL_BACKOFF = 3000; // Start with 3 seconds on retry
+
+// Helper function for delay
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // In-memory vector storage
 const vectorStore = {
   embeddings: [], // Array of { propertyId, embedding, property }
@@ -56,23 +64,46 @@ async function generatePropertyEmbedding(propertyId) {
       ${property.units ? 'عدد الوحدات المتاحة: ' + property.units : ''}
     `.trim();
 
-    // Generate embedding using Fireworks AI
+    // Generate embedding using Fireworks AI with retry logic
     const config = getFireworksConfig();
-    const response = await axios.post(
-      config.url,
-      {
-        input: propertyText,
-        model: config.model,
-      },
-      {
-        headers: {
-          "Authorization": `Bearer ${config.apiKey}`,
-          "Content-Type": "application/json",
-        },
+    let embedding;
+    let retries = 0;
+    
+    while (retries < MAX_RETRIES) {
+      try {
+        const response = await axios.post(
+          config.url,
+          {
+            input: propertyText,
+            model: config.model,
+          },
+          {
+            headers: {
+              "Authorization": `Bearer ${config.apiKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 10000, // 10 second timeout
+          }
+        );
+        
+        embedding = response.data.data[0].embedding;
+        break; // Success, exit retry loop
+      } catch (error) {
+        if (error.response?.status === 429 && retries < MAX_RETRIES - 1) {
+          retries++;
+          // Progressive exponential backoff: 3s, 6s, 12s, 24s, 48s
+          const waitTime = INITIAL_BACKOFF * Math.pow(2, retries - 1);
+          console.log(`⏳ Rate limit hit, waiting ${waitTime}ms before retry ${retries}/${MAX_RETRIES}...`);
+          await sleep(waitTime);
+        } else {
+          throw error; // Re-throw if not 429 or max retries reached
+        }
       }
-    );
-
-    const embedding = response.data.data[0].embedding;
+    }
+    
+    if (!embedding) {
+      throw new Error("Failed to generate embedding after all retries");
+    }
 
     // Store in memory vector store (no MongoDB save)
     const existingIndex = vectorStore.embeddings.findIndex(
@@ -118,12 +149,27 @@ async function generateAllEmbeddings() {
     console.log(`   📊 Including ${projectCount} projects and ${developerCount} developer properties`);
 
     let successCount = 0;
-    for (const property of properties) {
+    for (let i = 0; i < properties.length; i++) {
+      const property = properties[i];
       try {
         await generatePropertyEmbedding(property._id);
         successCount++;
+        
+        // Add delay between requests to avoid rate limiting
+        if (i < properties.length - 1) {
+          // Add random jitter (±20%) to avoid synchronized requests
+          const jitter = Math.floor(RATE_LIMIT_DELAY * 0.2 * (Math.random() - 0.5) * 2);
+          const delayWithJitter = RATE_LIMIT_DELAY + jitter;
+          console.log(`⏳ Waiting ${delayWithJitter}ms before next request... (${i + 1}/${properties.length})`);
+          await sleep(delayWithJitter);
+        }
       } catch (error) {
-        console.error(`Failed for property ${property._id}:`, error.message);
+        console.error(`❌ Failed for property ${property._id}:`, error.message);
+        // On error, wait extra time before continuing
+        if (i < properties.length - 1) {
+          console.log(`⏳ Error occurred, waiting extra 3 seconds...`);
+          await sleep(3000);
+        }
       }
     }
 
@@ -141,27 +187,41 @@ async function generateAllEmbeddings() {
  * @returns {Promise<Array>} Embedding vector
  */
 async function generateQueryEmbedding(queryText) {
-  try {
-    const config = getFireworksConfig();
-    const response = await axios.post(
-      config.url,
-      {
-        input: queryText,
-        model: config.model,
-      },
-      {
-        headers: {
-          "Authorization": `Bearer ${config.apiKey}`,
-          "Content-Type": "application/json",
+  let retries = 0;
+  
+  while (retries < MAX_RETRIES) {
+    try {
+      const config = getFireworksConfig();
+      const response = await axios.post(
+        config.url,
+        {
+          input: queryText,
+          model: config.model,
         },
-      }
-    );
+        {
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 10000,
+        }
+      );
 
-    return response.data.data[0].embedding;
-  } catch (error) {
-    console.error("❌ Error generating query embedding:", error.message);
-    throw error;
+      return response.data.data[0].embedding;
+    } catch (error) {
+      if (error.response?.status === 429 && retries < MAX_RETRIES - 1) {
+        retries++;
+        const waitTime = INITIAL_BACKOFF * Math.pow(2, retries - 1);
+        console.log(`⏳ Query embedding rate limit hit, waiting ${waitTime}ms... (retry ${retries}/${MAX_RETRIES})`);
+        await sleep(waitTime);
+      } else {
+        console.error("❌ Error generating query embedding:", error.message);
+        throw error;
+      }
+    }
   }
+  
+  throw new Error("Failed to generate query embedding after all retries");
 }
 
 // الحالات المتاحة للعقارات (استبعاد المباعة والمؤجرة)
