@@ -18,7 +18,28 @@ function buildFilters(preferences = {}) {
   }
 
   if (Array.isArray(preferences.propertyType) && preferences.propertyType.length) {
-    filters.type = { $in: preferences.propertyType };
+    // تحويل الأنواع للإنجليزية إذا لزم الأمر
+    const typeMap = {
+      'شقة': 'apartment',
+      'شقق': 'apartment',
+      'apartment': 'apartment',
+      'فيلا': 'villa',
+      'فلل': 'villa',
+      'villa': 'villa',
+      'منزل': 'house',
+      'بيت': 'house',
+      'house': 'house',
+      'studio': 'apartment',
+      'duplex': 'house',
+      'commercial': 'project',
+      'land': 'project',
+    };
+    const mappedTypes = preferences.propertyType
+      .map(t => typeMap[t?.toLowerCase()] || t?.toLowerCase())
+      .filter(Boolean);
+    if (mappedTypes.length > 0) {
+      filters.type = { $in: mappedTypes };
+    }
   }
 
   if (preferences.location) {
@@ -42,7 +63,8 @@ function buildFilters(preferences = {}) {
   }
 
   if (typeof preferences.bedrooms === "number") {
-    filters.bedrooms = { $gte: preferences.bedrooms };
+    // مطابقة دقيقة لعدد الغرف المطلوب
+    filters.bedrooms = { $eq: preferences.bedrooms };
   }
 
   if (Array.isArray(preferences.features) && preferences.features.length) {

@@ -4,6 +4,9 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const mongoose = require("mongoose");
+const http = require("http");
+const { Server } = require("socket.io");
+const jwt = require("jsonwebtoken");
 
 const userRoute = require("./routes/userRoute");
 const propertiesRoute = require("./routes/propertyRoute");
@@ -25,6 +28,50 @@ const Notification = require("./models/notificationModel"); // استدعاء ا
 const { initGridFS } = require("./config/gridfs");
 
 const app = express();
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+// خلي io global
+global.io = io;
+io.on("connection", (socket) => {
+  try {
+    console.log("🟢 Socket connected:", socket.id);
+
+    const token = socket.handshake.auth?.token;
+
+    if (!token) {
+      console.log("❌ Socket rejected: no token");
+      socket.disconnect();
+      return;
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.id || decoded._id;
+
+    if (!userId) {
+      console.log("❌ Socket rejected: no userId");
+      socket.disconnect();
+      return;
+    }
+
+    socket.join(userId.toString());
+
+    console.log(`✅ Socket authenticated, joined room: ${userId}`);
+
+    socket.on("disconnect", () => {
+      console.log(`🔴 Socket disconnected: user ${userId}`);
+    });
+  } catch (err) {
+    console.log("❌ Socket auth error:", err.message);
+    socket.disconnect();
+  }
+});
 
 // Middleware
 app.use(express.urlencoded({ extended: true }));
@@ -90,8 +137,8 @@ async function main() {
     
     // Start server AFTER everything is ready
     const PORT = process.env.PORT || 5000;
-    app.listen(PORT, () => {
-      console.log(` Server is running on port ${PORT}`);
+    server.listen(PORT, () => {
+      console.log(`🚀 Server + Socket.IO running on port ${PORT}`);
       console.log(`🚀 Ready to handle requests!`);
     });
   } catch (err) {

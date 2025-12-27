@@ -2089,85 +2089,93 @@ function formatTransactionsContext(negotiations = [], drafts = [], contracts = [
 /**
  * معالج خاص لطلبات التوصيات من الأونبوردينج - يستخرج الفلاتر مباشرة ويبحث بدقة
  */
-async function handleOnboardingRecommendations(req, res, query, userId) {
+async function handleOnboardingRecommendations(req, res, query, userId, directPreferences = null) {
   try {
-    console.log('📋 Processing onboarding recommendations with filters extraction');
+    console.log('📋 Processing onboarding recommendations');
+    console.log('📦 Direct preferences received:', JSON.stringify(directPreferences, null, 2));
 
-    // استخراج الفلاتر من prompt الأونبوردينج
+    // استخدام التفضيلات المباشرة مباشرة بدلاً من استخراجها من النص
     const recommendationFilters = {};
+    const prefs = directPreferences || {};
 
-    // استخراج الميزانية
-    const budgetMatch = query.match(/الحد الأدنى:\s*([\d,]+)\s*جنيه/);
-    const maxBudgetMatch = query.match(/الحد الأقصى:\s*([\d,]+)\s*جنيه/);
-    if (budgetMatch) {
-      recommendationFilters.minPrice = parseInt(budgetMatch[1].replace(/,/g, ''));
-    }
-    if (maxBudgetMatch) {
-      recommendationFilters.maxPrice = parseInt(maxBudgetMatch[1].replace(/,/g, ''));
-    }
-
-    // استخراج نوع العقار
-    const typeMatch = query.match(/نوع العقار المفضل:\s*([^-\n]+)/);
-    if (typeMatch) {
-      const types = typeMatch[1].trim().split(/،|,/).map(t => t.trim()).filter(Boolean);
-      if (types.length > 0 && types[0] !== 'غير محدد') {
-        // تحويل الأنواع العربية إلى الإنجليزية
-        const typeMap = {
-          'شقة': 'apartment',
-          'فيلا': 'villa',
-          'منزل': 'house',
-          'بيت': 'house',
-          'استوديو': 'apartment',
-          'دوبلكس': 'house',
-          'مكتب': 'project',
-          'محل': 'project',
-        };
-        const mappedTypes = types.map(t => typeMap[t] || t).filter(Boolean);
-        if (mappedTypes.length > 0) {
-          recommendationFilters.type = mappedTypes[0]; // Use first type for simplicity
-        }
+    // ✅ الميزانية - مباشرة من التفضيلات
+    if (prefs.budgetEnabled) {
+      if (prefs.budgetMin != null) {
+        recommendationFilters.minPrice = Number(prefs.budgetMin);
+      }
+      if (prefs.budgetMax != null) {
+        recommendationFilters.maxPrice = Number(prefs.budgetMax);
       }
     }
 
-    // استخراج الموقع المفضل
-    const locationMatch = query.match(/الموقع المفضل داخل مصر:\s*([^-\n]+)/);
-    if (locationMatch) {
-      const location = locationMatch[1].trim();
-      if (location && location !== 'غير محدد') {
-        // توسيع القيم لتشمل المرادفات
-        recommendationFilters.city = expandCityValues([location]);
+    // ✅ نوع العقار - مباشرة من التفضيلات (قائمة الأنواع)
+    if (Array.isArray(prefs.propertyType) && prefs.propertyType.length > 0) {
+      const typeMap = {
+        'شقة': 'apartment',
+        'شقق': 'apartment',
+        'apartment': 'apartment',
+        'فيلا': 'villa',
+        'فلل': 'villa',
+        'villa': 'villa',
+        'منزل': 'house',
+        'بيت': 'house',
+        'house': 'house',
+        'استوديو': 'apartment',
+        'studio': 'apartment',
+        'دوبلكس': 'house',
+        'duplex': 'house',
+        'مكتب': 'project',
+        'محل': 'project',
+        'commercial': 'project',
+        'land': 'project',
+        'project': 'project',
+      };
+      const mappedTypes = prefs.propertyType
+        .map(t => typeMap[t.toLowerCase()] || t.toLowerCase())
+        .filter(Boolean);
+      if (mappedTypes.length > 0) {
+        recommendationFilters.types = Array.from(new Set(mappedTypes));
       }
     }
 
-    // استخراج عدد غرف النوم
-    const bedroomsMatch = query.match(/عدد غرف النوم:\s*(\d+)/);
-    if (bedroomsMatch) {
-      recommendationFilters.bedrooms = parseInt(bedroomsMatch[1]);
+    // ✅ الموقع - مباشرة من التفضيلات
+    if (prefs.location && prefs.location !== 'غير محدد') {
+      recommendationFilters.city = expandCityValues([prefs.location]);
     }
 
-    // استخراج طريقة الدفع
-    const paymentMatch = query.match(/طريقة الدفع المفضلة:\s*([^-\n]+)/);
-    if (paymentMatch) {
-      const payment = paymentMatch[1].trim();
-      if (payment.includes('كاش') || payment.includes('نقدي')) {
-        recommendationFilters.paymentMethod = 'cash';
-      } else if (payment.includes('تقسيط')) {
-        recommendationFilters.paymentMethod = 'installments';
+    // ✅ نطاق المساحة - مباشرة من التفضيلات
+    if (prefs.areaRange) {
+      const rangeMap = {
+        '<100': { min: null, max: 100 },
+        '100-150': { min: 100, max: 150 },
+        '150-200': { min: 150, max: 200 },
+        '>200': { min: 200, max: null },
+      };
+      if (rangeMap[prefs.areaRange]) {
+        recommendationFilters.area = rangeMap[prefs.areaRange];
       }
     }
 
-    // استخراج حالة المشروع
-    const stageMatch = query.match(/حالة المشروع المفضلة:\s*([^-\n]+)/);
-    if (stageMatch) {
-      const stage = stageMatch[1].trim();
-      if (stage.includes('جاهز')) {
+    // ✅ عدد غرف النوم - مباشرة من التفضيلات (مطابقة دقيقة)
+    if (prefs.bedrooms != null && prefs.bedrooms !== '') {
+      recommendationFilters.bedrooms = Number(prefs.bedrooms);
+    }
+
+    // ✅ طريقة الدفع - مباشرة من التفضيلات
+    if (prefs.paymentPreference) {
+      recommendationFilters.paymentMethod = prefs.paymentPreference;
+    }
+
+    // ✅ حالة المشروع - مباشرة من التفضيلات
+    if (prefs.projectStagePreference && prefs.projectStagePreference !== 'no_preference') {
+      if (prefs.projectStagePreference === 'ready') {
         recommendationFilters.status = 'available';
-      } else if (stage.includes('تحت الإنشاء')) {
+      } else if (prefs.projectStagePreference === 'under_construction') {
         recommendationFilters.status = 'under_construction';
       }
     }
 
-    console.log('🔍 Extracted onboarding filters:', JSON.stringify(recommendationFilters, null, 2));
+    console.log('🔍 Built onboarding filters from direct preferences:', JSON.stringify(recommendationFilters, null, 2));
 
     // بناء query لقاعدة البيانات
     const mongoQuery = {};
@@ -2183,21 +2191,36 @@ async function handleOnboardingRecommendations(req, res, query, userId) {
       }
     }
 
-    // فلتر النوع
-    if (recommendationFilters.type) {
+    // فلتر النوع (يدعم قائمة أنواع)
+    if (Array.isArray(recommendationFilters.types) && recommendationFilters.types.length > 0) {
+      mongoQuery.type = { $in: recommendationFilters.types };
+    } else if (recommendationFilters.type) {
       mongoQuery.type = recommendationFilters.type;
     }
 
-    // فلتر الموقع
+    // فلتر الموقع - استخدم regex string بدلاً من RegExp object لتجنب التحويل الخاطئ
     if (recommendationFilters.city && recommendationFilters.city.length > 0) {
-      mongoQuery['location.city'] = {
-        $in: recommendationFilters.city.map(c => new RegExp(c, 'i'))
-      };
+      const cityRegexes = recommendationFilters.city
+        .filter(c => c && typeof c === 'string' && c.trim())
+        .map(c => new RegExp(c.trim(), 'i'));
+      if (cityRegexes.length > 0) {
+        mongoQuery['location.city'] = { $in: cityRegexes };
+      }
     }
 
-    // فلتر غرف النوم
+    // فلتر غرف النوم (مطابقة دقيقة لما اختاره المستخدم)
     if (recommendationFilters.bedrooms) {
-      mongoQuery.bedrooms = { $gte: recommendationFilters.bedrooms };
+      mongoQuery.bedrooms = { $eq: recommendationFilters.bedrooms };
+    }
+
+    // فلتر المساحة
+    if (recommendationFilters.area) {
+      const areaFilter = {};
+      if (recommendationFilters.area.min != null) areaFilter.$gte = recommendationFilters.area.min;
+      if (recommendationFilters.area.max != null) areaFilter.$lte = recommendationFilters.area.max;
+      if (Object.keys(areaFilter).length > 0) {
+        mongoQuery.area = areaFilter;
+      }
     }
 
     // فلتر حالة المشروع
@@ -2227,22 +2250,35 @@ async function handleOnboardingRecommendations(req, res, query, userId) {
 
     console.log(`✅ Found ${properties.length} matching properties`);
 
-    // إذا لم نجد نتائج، نوسع البحث (نزيل فلتر واحد في كل مرة)
+    // إذا لم نجد نتائج، نوسع البحث (نزيل فلاتر غير حرجة فقط - نحافظ على النوع والغرف)
     if (properties.length === 0 && Object.keys(mongoQuery).length > 0) {
-      console.log('🔄 No results found, trying relaxed search...');
+      console.log('🔄 No results found, trying relaxed search (keeping type and bedrooms)...');
 
-      // حذف فلاتر غير حرجة بالترتيب
-      if (mongoQuery.bedrooms) delete mongoQuery.bedrooms;
-      if (mongoQuery.status) delete mongoQuery.status;
-      if (mongoQuery.$or) delete mongoQuery.$or;
+      // حذف فلاتر غير حرجة فقط - احتفظ بالنوع وعدد الغرف
+      const relaxedQuery = { ...mongoQuery };
+      delete relaxedQuery.status;
+      delete relaxedQuery.$or;
+      delete relaxedQuery.area;
+      delete relaxedQuery['paymentOptions.installments'];
 
-      properties = await Property.find(mongoQuery)
+      properties = await Property.find(relaxedQuery)
         .select('-embedding')
         .sort({ createdAt: -1 })
         .limit(10)
         .lean();
 
-      console.log(`✅ Relaxed search found ${properties.length} properties`);
+      console.log(`✅ First relaxed search found ${properties.length} properties`);
+
+      // إذا لا يزال فارغاً، نزيل فلتر الغرف فقط
+      if (properties.length === 0) {
+        delete relaxedQuery.bedrooms;
+        properties = await Property.find(relaxedQuery)
+          .select('-embedding')
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .lean();
+        console.log(`✅ Second relaxed search (no bedrooms) found ${properties.length} properties`);
+      }
     }
 
     // إذا لا توجد نتائج حتى بعد التوسع، أرجع رسالة
@@ -2265,9 +2301,16 @@ async function handleOnboardingRecommendations(req, res, query, userId) {
       `✨ تم اختيار هذه العقارات بناءً على:\n` +
       (recommendationFilters.minPrice || recommendationFilters.maxPrice ?
         `💰 الميزانية: ${recommendationFilters.minPrice?.toLocaleString() || '—'} - ${recommendationFilters.maxPrice?.toLocaleString() || '—'} جنيه\n` : '') +
-      (recommendationFilters.type ? `🏠 النوع: ${recommendationFilters.type}\n` : '') +
+      (Array.isArray(recommendationFilters.types) && recommendationFilters.types.length ? `🏠 النوع: ${recommendationFilters.types.join(' / ')}\n` : (recommendationFilters.type ? `🏠 النوع: ${recommendationFilters.type}\n` : '')) +
       (recommendationFilters.city ? `📍 الموقع: ${recommendationFilters.city[0]}\n` : '') +
-      (recommendationFilters.bedrooms ? `🛏️ الغرف: ${recommendationFilters.bedrooms}+\n` : '') +
+      (recommendationFilters.bedrooms ? `🛏️ الغرف: ${recommendationFilters.bedrooms}\n` : '') +
+      (recommendationFilters.area ? `📐 المساحة: ${
+        recommendationFilters.area.min != null && recommendationFilters.area.max != null
+          ? `${recommendationFilters.area.min}-${recommendationFilters.area.max} م²`
+          : recommendationFilters.area.min != null
+            ? `>= ${recommendationFilters.area.min} م²`
+            : `<= ${recommendationFilters.area.max} م²`
+      }\n` : '') +
       '\nاستمتع باستعراض الخيارات المتاحة! 😊';
 
     return res.json({
@@ -2426,7 +2469,7 @@ const isAIConfigured = () => {
  */
 exports.aiQuery = async (req, res) => {
   try {
-    const { query, filters, history, source, currentProperties } = req.body;
+    const { query, filters, history, source, currentProperties, preferences, pendingNegotiation } = req.body;
     const userId = (req.user?.id || req.user?._id || '').toString() || null;
     console.log(`👤 User ID from request: ${userId || 'NOT AUTHENTICATED'}`);
     const { memorySummary, promptHistory } = await buildPromptContext(userId, history);
@@ -2441,13 +2484,26 @@ exports.aiQuery = async (req, res) => {
       console.log(`📋 Current properties in context: ${currentProperties.length}`);
     }
 
+    // ✅ إضافة سياق التفاوض المعلق (العقار اللي العميل بيتفاوض عليه حالياً)
+    let pendingNegotiationContext = "";
+    if (pendingNegotiation && pendingNegotiation.propertyId) {
+      pendingNegotiationContext = "\n🤝 **تفاوض معلق - العميل ينتظر إكمال التفاوض:**\n" +
+        `- العقار: ${pendingNegotiation.propertyTitle || 'غير معروف'}\n` +
+        `- المدينة: ${pendingNegotiation.propertyCity || 'غير محدد'}\n` +
+        `- السعر: ${pendingNegotiation.propertyPrice?.toLocaleString() || 'غير محدد'} جنيه\n` +
+        `- ID: ${pendingNegotiation.propertyId}\n` +
+        `- في انتظار: ${pendingNegotiation.waitingFor === 'paymentType' ? 'طريقة الدفع (كاش/تقسيط)' : 'تفاصيل إضافية'}\n` +
+        `⚠️ **هام جداً**: عند الرد على أي سؤال عن الدفع (كاش/تقسيط/إيجار)، استخدم معلومات العقار أعلاه فقط!\n`;
+      console.log(`🤝 Pending negotiation context added for property: ${pendingNegotiation.propertyId}`);
+    }
+
     // ✅ معالجة خاصة لطلبات التوصيات من الأونبوردينج
     const isOnboardingRecommendations = source === 'onboarding-recommendations' ||
       (query && /لدي عميل يريد ترشيحات عقارية/i.test(query));
 
     if (isOnboardingRecommendations) {
       console.log('🎯 Onboarding recommendations request detected');
-      return await handleOnboardingRecommendations(req, res, query, userId);
+      return await handleOnboardingRecommendations(req, res, query, userId, preferences);
     }
 
     // ✅ معالجة إضافة عقار للبائعين
@@ -4151,8 +4207,8 @@ exports.aiQuery = async (req, res) => {
         } console.log(`📦 Retrieved ${retrievedProperties.length} properties from vector search`);
 
         // Step 2: Generate AI response using LLM (if AI configured)
-        // ✅ إضافة سياق العقارات الحالية للـ negotiationsContext
-        const fullContext = currentPropertiesContext + negotiationsContext;
+        // ✅ إضافة سياق العقارات الحالية والتفاوض المعلق للـ negotiationsContext
+        const fullContext = currentPropertiesContext + pendingNegotiationContext + negotiationsContext;
 
         if (useAI && retrievedProperties.length > 0) {
           try {

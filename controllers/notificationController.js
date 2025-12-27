@@ -112,8 +112,15 @@ exports.createNotification = async ({
     await notification.save();
 
     console.log(`✅ Notification created for user: ${recipient}`);
-    console.log(`📧 Title: ${title}`); // ✅ أضف ده
-    console.log(`💬 Message: ${message}`); // ✅ أضف ده
+    console.log(`📧 Title: ${title}`);
+    console.log(`💬 Message: ${message}`);
+
+    // 🔔 Real-time emit
+    if (global.io) {
+      global.io
+        .to(recipient.toString()) // user room
+        .emit("new-notification", notification);
+    }
 
     return notification;
   } catch (err) {

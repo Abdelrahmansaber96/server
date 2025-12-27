@@ -99,7 +99,8 @@ function buildFilterConditions(filters = {}) {
     clauses.push({ type: filters.type });
   }
   if (filters.bedrooms) {
-    clauses.push({ bedrooms: { $gte: Number(filters.bedrooms) } });
+    // مطابقة دقيقة لعدد الغرف
+    clauses.push({ bedrooms: { $eq: Number(filters.bedrooms) } });
   }
   // ✅ فلتر المساحة
   if (filters.minArea || filters.maxArea) {
@@ -192,13 +193,10 @@ async function fallbackDatabaseSearch(queryText, filters = {}, limit = 5) {
       .lean();
   }
 
-  // ✅ تجربة 4: إذا لا زلنا لم نجد، أرجع أحدث العقارات المتاحة
+  // ✅ تجربة 4: إذا لا زلنا لم نجد، أرجع مصفوفة فارغة بدلاً من عقارات غير مطابقة
   if (docs.length === 0) {
-    console.log(`ℹ️ No matching results, returning latest available properties...`);
-    docs = await Property.find({ status: { $in: AVAILABLE_STATUSES } })
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
+    console.log(`ℹ️ No matching results found, returning empty array`);
+    return [];
   }
 
   console.log(
